@@ -1,0 +1,15 @@
+# Credenciales y datos — NUNCA subir a Git
+.env
+sync-data/
+actual-data/
+
+# Dependencias
+sync/node_modules/
+
+# Sistema
+.DS_Store
+Thumbs.db
+.claude/
+
+# Backups
+*.zip

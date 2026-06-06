@@ -1,0 +1,10 @@
+services:
+  brosco-sync:
+    build: ./sync
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./sync-data:/app/data
+    environment:
+      - TZ=America/Asuncion

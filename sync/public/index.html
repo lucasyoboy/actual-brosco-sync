@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brosco → Actual Sync</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d0f18; --surface: #161929; --surface2: #1e2235;
+      --border: #252840; --text: #e2e8f0; --muted: #5a6480;
+      --accent: #6366f1; --accent-h: #4f46e5; --accent-dim: rgba(99,102,241,.12);
+      --green: #22c55e; --red: #ef4444; --yellow: #f59e0b; --blue: #3b82f6;
+      --sidebar: 260px;
+    }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; font-size: 14px; }
+    .app { display: flex; height: 100vh; overflow: hidden; }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: var(--sidebar); flex-shrink: 0;
+      background: var(--surface); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; padding: 20px 12px;
+    }
+    .logo { display: flex; align-items: center; gap: 12px; padding: 8px 10px 24px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+    .logo-icon { width: 36px; height: 36px; background: var(--accent); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+    .logo-name { font-weight: 700; font-size: 15px; }
+    .logo-sub  { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+    .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 8px; cursor: pointer;
+      color: var(--muted); font-weight: 500; font-size: 13px;
+      transition: all .15s; border: none; background: none; width: 100%; text-align: left; font-family: inherit;
+    }
+    .nav-item:hover  { background: rgba(255,255,255,.04); color: var(--text); }
+    .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+    .nav-icon { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; }
+    .nav-badge { margin-left: auto; font-size: 10px; background: var(--accent); color: #fff; border-radius: 10px; padding: 1px 6px; font-weight: 600; }
+
+    .sidebar-status { padding: 12px 10px; border-top: 1px solid var(--border); margin-top: 8px; }
+    .status-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot.ok      { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.error   { background: var(--red); }
+    .dot.syncing { background: var(--yellow); animation: pulse 1s infinite; }
+    .dot.idle    { background: var(--muted); }
+    @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.3} }
+
+    /* ── Main ── */
+    .main { flex: 1; overflow-y: auto; background: var(--bg); }
+    .page { display: none !important; }
+    .page.active { display: block !important; padding: 32px; }
+    #page-logs.active { display: flex !important; flex-direction: column; padding: 0; height: 100%; }
+
+    .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+    .page-title  { font-size: 22px; font-weight: 700; }
+    .page-sub    { font-size: 13px; color: var(--muted); margin-top: 3px; }
+
+    /* ── Cards ── */
+    .cards { display: grid; gap: 16px; margin-bottom: 28px; }
+    .cards-3 { grid-template-columns: repeat(3,1fr); }
+    .cards-2 { grid-template-columns: repeat(2,1fr); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; }
+    .card-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
+    .card-value { font-size: 26px; font-weight: 700; }
+    .card-value.green  { color: var(--green); }
+    .card-value.red    { color: var(--red); }
+    .card-value.yellow { color: var(--yellow); }
+    .card-sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+    .account-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 24px; margin-bottom: 14px; }
+    .account-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+    .account-num  { font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 700; }
+    .account-meta { font-size: 12px; color: var(--muted); }
+    .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge-green { background: rgba(34,197,94,.15); color: var(--green); }
+    .badge-muted { background: rgba(90,100,128,.15); color: var(--muted); }
+    .badge-blue  { background: rgba(59,130,246,.15); color: var(--blue); }
+    .badge-yellow{ background: rgba(245,158,11,.15); color: var(--yellow); }
+
+    /* ── Forms ── */
+    .section { margin-bottom: 32px; }
+    .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .grid { display: grid; gap: 14px; }
+    .grid-2 { grid-template-columns: 1fr 1fr; }
+    .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+    .span-2 { grid-column: span 2; }
+    .span-3 { grid-column: span 3; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    label  { font-size: 12px; color: var(--muted); font-weight: 500; }
+    input[type=text], input[type=password], input[type=number], select {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      border-radius: 8px; padding: 9px 12px; font-size: 13px; font-family: inherit;
+      transition: border-color .15s; outline: none; width: 100%;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    select option { background: var(--surface2); }
+    .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .input-row { display: flex; gap: 8px; align-items: flex-start; }
+    .input-row input, .input-row select { flex: 1; }
+
+    /* Toggle */
+    .toggle-wrap { display: flex; align-items: center; gap: 10px; }
+    .toggle-label { font-size: 13px; color: var(--text); }
+    .toggle { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; inset: 0; background: var(--border); border-radius: 22px; cursor: pointer; transition: .2s;
+    }
+    .toggle-slider:before {
+      content: ''; position: absolute; width: 16px; height: 16px; left: 3px; bottom: 3px;
+      background: #fff; border-radius: 50%; transition: .2s;
+    }
+    .toggle input:checked + .toggle-slider { background: var(--accent); }
+    .toggle input:checked + .toggle-slider:before { transform: translateX(18px); }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px; padding: 9px 18px;
+      border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+      border: none; font-family: inherit; transition: all .15s; white-space: nowrap;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-h); }
+    .btn-ghost   { background: rgba(255,255,255,.06); color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled)   { background: rgba(255,255,255,.1); }
+    .btn-danger  { background: rgba(239,68,68,.15); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+    .btn-danger:hover:not(:disabled)  { background: rgba(239,68,68,.25); }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-icon { padding: 8px; width: 34px; height: 34px; justify-content: center; }
+
+    .form-actions { display: flex; align-items: center; gap: 12px; padding-top: 8px; }
+    .save-msg { font-size: 13px; color: var(--green); opacity: 0; transition: opacity .3s; }
+    .save-msg.show { opacity: 1; }
+
+    /* Error */
+    .error-box { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); border-radius: 10px; padding: 12px 16px; font-size: 13px; color: #fca5a5; margin-bottom: 20px; display: none; }
+    .error-box.show { display: block; }
+
+    /* ── Account linking card ── */
+    .link-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 24px; margin-bottom: 16px; }
+    .link-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .link-status { margin-left: auto; }
+
+    /* ── Category rules table ── */
+    .rules-table { width: 100%; border-collapse: collapse; }
+    .rules-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+    .rules-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    .rules-table tr:last-child td { border-bottom: none; }
+    .rules-empty { text-align: center; color: var(--muted); font-size: 13px; padding: 32px; }
+
+    /* ── Modal ── */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 100; display: none; align-items: center; justify-content: center; }
+    .modal-backdrop.show { display: flex; }
+    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; width: 520px; max-height: 80vh; display: flex; flex-direction: column; }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid var(--border); }
+    .modal-title  { font-size: 16px; font-weight: 700; }
+    .modal-body   { padding: 20px 24px; overflow-y: auto; }
+    .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
+    .budget-row { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 10px; cursor: pointer; border: 1px solid var(--border); margin-bottom: 8px; transition: all .15s; }
+    .budget-row:hover { background: var(--accent-dim); border-color: var(--accent); }
+    .budget-row-name { font-weight: 600; font-size: 14px; }
+    .budget-row-id   { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); }
+
+    /* ── Logs ── */
+    .log-bar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .log-bar-title { font-weight: 600; font-size: 15px; }
+    .log-viewer { background: #080a10; padding: 16px 24px; flex: 1; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.7; }
+    .log-entry  { display: flex; gap: 14px; }
+    .log-ts     { color: #3a4060; flex-shrink: 0; }
+    .log-level-info  { color: #6366f1; width: 36px; flex-shrink: 0; }
+    .log-level-error { color: #ef4444; width: 36px; flex-shrink: 0; }
+    .log-level-warn  { color: #f59e0b; width: 36px; flex-shrink: 0; }
+    .log-msg         { color: #8892b0; }
+    .toggle-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+    .toggle-check input { accent-color: var(--accent); cursor: pointer; }
+    .log-count { font-size: 12px; color: var(--muted); }
+
+    /* ── Divider ── */
+    .divider { height: 1px; background: var(--border); margin: 24px 0; }
+
+    /* ── Sync button big ── */
+    .sync-big { display: flex; align-items: center; gap: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 24px; margin-bottom: 28px; }
+    .sync-big-info { flex: 1; }
+    .sync-big-title { font-weight: 600; font-size: 15px; }
+    .sync-big-sub   { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+    /* ── Spinner ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div class="app">
+
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="logo">
+    <div class="logo-icon">⇄</div>
+    <div><div class="logo-name">Brosco Sync</div><div class="logo-sub">→ Actual Budget</div></div>
+  </div>
+  <nav class="nav">
+    <button class="nav-item active" data-page="dashboard"><span class="nav-icon">◉</span> Dashboard</button>
+    <button class="nav-item" data-page="cuentas"><span class="nav-icon">◈</span> Cuentas</button>
+    <button class="nav-item" data-page="categorias"><span class="nav-icon">⊞</span> Categorías</button>
+    <button class="nav-item" data-page="config"><span class="nav-icon">⚙</span> Configuración</button>
+    <button class="nav-item" data-page="logs"><span class="nav-icon">≡</span> Logs</button>
+  </nav>
+  <div class="sidebar-status">
+    <div class="status-row">
+      <span class="dot idle" id="statusDot"></span>
+      <span id="statusText" style="font-size:12px;">Cargando...</span>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:5px;" id="lastSyncText">—</div>
+  </div>
+</aside>
+
+<!-- Main content -->
+<main class="main">
+
+  <!-- ── Dashboard ── -->
+  <div id="page-dashboard" class="page active">
+    <div class="page-header">
+      <div><div class="page-title">Dashboard</div><div class="page-sub">Estado del sync con Brosco Cooperativa</div></div>
+    </div>
+
+    <div id="errorBox" class="error-box"></div>
+
+    <div class="sync-big">
+      <div class="sync-big-info">
+        <div class="sync-big-title" id="syncStatusTitle">En espera</div>
+        <div class="sync-big-sub"  id="syncStatusSub">El sync automático corre según el horario configurado</div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" id="syncBtn" onclick="triggerSync()">↺ Sincronizar ahora</button>
+        <button class="btn btn-ghost" onclick="openWizard()">📅 Importar por meses</button>
+      </div>
+    </div>
+
+    <div class="cards cards-3">
+      <div class="card">
+        <div class="card-label">Última sincronización</div>
+        <div id="lastSyncVal" class="card-value" style="font-size:18px;padding-top:4px;">—</div>
+        <div id="lastSyncDate" class="card-sub">—</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Transacciones (último sync)</div>
+        <div id="totalNewVal" class="card-value green">—</div>
+        <div class="card-sub">nuevas importadas</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Cuentas activas</div>
+        <div id="accountCountVal" class="card-value">—</div>
+        <div class="card-sub">sincronizando</div>
+      </div>
+    </div>
+
+    <div id="accountCards"></div>
+  </div>
+
+  <!-- ── Cuentas ── -->
+  <div id="page-cuentas" class="page">
+    <div class="page-header">
+      <div><div class="page-title">Cuentas</div><div class="page-sub">Vinculá cada cuenta Brosco con una cuenta en Actual Budget</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="loadCuentas()">↻ Actualizar</button>
+    </div>
+    <div id="cuentasContainer"><div style="color:var(--muted);font-size:13px;">Cargando...</div></div>
+  </div>
+
+  <!-- ── Categorías ── -->
+  <div id="page-categorias" class="page">
+    <div class="page-header">
+      <div><div class="page-title">Categorías</div><div class="page-sub">Reglas manuales + categorización automática con IA</div></div>
+      <button class="btn btn-primary btn-sm" onclick="addRule()">+ Agregar regla</button>
+    </div>
+
+    <!-- Pipeline info -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:24px;">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">① Reglas manuales</div>
+        <div style="font-size:13px;">Primero se chequea si la descripción coincide con algún patrón de la tabla.</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">② Claude IA</div>
+        <div style="font-size:13px;" id="aiStatusInfo">Si no hay coincidencia y la IA está activada, Claude asigna la categoría.</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">③ Sin categoría</div>
+        <div style="font-size:13px;">Si ninguna fuente da resultado, la transacción queda sin categoría en Actual.</div>
+      </div>
+    </div>
+
+    <!-- Rules table -->
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
+      <table class="rules-table" id="rulesTable">
+        <thead><tr><th>Si la descripción contiene...</th><th>Asignar categoría</th><th></th></tr></thead>
+        <tbody id="ruleRows"><tr><td colspan="3" class="rules-empty">No hay reglas. Hacé clic en "+ Agregar regla".</td></tr></tbody>
+      </table>
+    </div>
+    <div class="form-actions" style="margin-bottom:28px;">
+      <button class="btn btn-primary" onclick="saveRules()">Guardar reglas</button>
+      <span class="save-msg" id="rulesSaveMsg">✓ Guardado</span>
+      <button class="btn btn-ghost btn-sm" onclick="clearCatCache()" style="margin-left:auto;">Limpiar caché IA</button>
+    </div>
+
+    <!-- Test widget -->
+    <div class="section">
+      <div class="section-title">Probar categorización</div>
+      <div style="display:flex;gap:10px;align-items:flex-end;">
+        <div class="field" style="flex:1;">
+          <label>Descripción del movimiento</label>
+          <input type="text" id="testDesc" placeholder="ej: DEUDORES PRO-EDUCACIÓN">
+        </div>
+        <button class="btn btn-ghost" onclick="testCategorize()" id="testBtn">Probar</button>
+      </div>
+      <div id="testResult" style="margin-top:12px;display:none;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;font-size:13px;"></div>
+    </div>
+  </div>
+
+  <!-- ── Configuración ── -->
+  <div id="page-config" class="page">
+    <div class="page-header">
+      <div><div class="page-title">Configuración</div><div class="page-sub">Credenciales y opciones del sync</div></div>
+    </div>
+    <form id="configForm" onsubmit="saveConfig(event)">
+
+      <div class="section">
+        <div class="section-title">Credenciales Brosco</div>
+        <div class="grid grid-2">
+          <div class="field span-2"><label>API Key</label><input type="text" name="broscoApiKey" style="font-family:'JetBrains Mono',monospace;font-size:12px;"></div>
+          <div class="field"><label>Usuario (CI)</label><input type="text" name="broscoUser"></div>
+          <div class="field"><label>Password</label><input type="password" name="broscoPassword" autocomplete="new-password"></div>
+          <div class="field"><label>Device ID</label><input type="text" name="broscoDeviceId" style="font-family:'JetBrains Mono',monospace;font-size:12px;"></div>
+          <div class="field"><label>Ssign</label><input type="text" name="broscoSsign" style="font-family:'JetBrains Mono',monospace;font-size:12px;"></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Actual Budget</div>
+        <div class="grid grid-2">
+          <div class="field"><label>Server URL</label><input type="text" name="actualServerUrl" placeholder="https://actual.tudominio.com"></div>
+          <div class="field"><label>Password del servidor</label><input type="password" name="actualPassword" autocomplete="new-password"></div>
+          <div class="field span-2">
+            <label>Sync ID del presupuesto</label>
+            <div class="input-row">
+              <input type="text" name="actualBudgetId" style="font-family:'JetBrains Mono',monospace;font-size:12px;" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+              <button type="button" class="btn btn-ghost" onclick="openBudgetModal()">Buscar presupuesto</button>
+            </div>
+            <span class="hint">Encontralo en Actual → Settings → Advanced → Sync ID</span>
+          </div>
+          <div class="field span-2">
+            <label>Password de encriptación <span style="font-weight:400;color:var(--muted);">(solo si el presupuesto tiene E2E encryption)</span></label>
+            <input type="password" name="actualEncryptPassword" autocomplete="new-password" placeholder="Dejar vacío si no usás encriptación extra">
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Saldo y reconciliación</div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:13px;color:var(--muted);line-height:1.6;">
+          Como Brosco solo expone los últimos meses de movimientos, el saldo en Actual no coincidiría con el real. Con esto activado, en cada sync se crea/ajusta una transacción <strong>"Ajuste de saldo Brosco"</strong> para que el balance de Actual sea exactamente el saldo contable real de la cooperativa.
+        </div>
+        <div class="field">
+          <label>Reconciliar saldo automáticamente</label>
+          <div class="toggle-wrap" style="margin-top:4px;">
+            <label class="toggle"><input type="checkbox" name="reconcileBalance" id="reconcileCheck"><span class="toggle-slider"></span></label>
+            <span class="toggle-label" id="reconcileLabel">Activado</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Horario y cuentas</div>
+        <div class="grid grid-3">
+          <div class="field">
+            <label>Cron Schedule</label>
+            <input type="text" name="syncCron" placeholder="0 */6 * * *">
+            <span class="hint">0 */6 * * * = cada 6h &nbsp;|&nbsp; 0 8 * * * = 8am diario</span>
+          </div>
+          <div class="field">
+            <label>Cuentas Brosco</label>
+            <input type="text" name="syncAccounts" style="font-family:'JetBrains Mono',monospace;" placeholder="8227200,8227201">
+          </div>
+          <div class="field">
+            <label>Meses de historial</label>
+            <input type="number" name="syncMonthsBack" placeholder="3" min="1" max="24">
+            <span class="hint">Meses hacia atrás por cada sync</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Categorización con IA</div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:16px;font-size:13px;color:var(--muted);line-height:1.6;">
+          Cuando ninguna regla manual coincide, Claude analiza la descripción del movimiento y asigna la categoría más apropiada de tu presupuesto. Los resultados se guardan en caché para no repetir llamadas.
+        </div>
+        <div class="grid grid-2">
+          <div class="field span-2">
+            <label>Estado</label>
+            <div class="toggle-wrap" style="margin-top:4px;">
+              <label class="toggle"><input type="checkbox" name="useAiCategories" id="useAiCheck"><span class="toggle-slider"></span></label>
+              <span class="toggle-label" id="useAiLabel">Desactivado</span>
+            </div>
+          </div>
+          <div class="field span-2">
+            <label>Claude API Key</label>
+            <input type="password" name="claudeApiKey" autocomplete="new-password" placeholder="sk-ant-api03-...">
+            <span class="hint">Obtené tu key en <strong>console.anthropic.com</strong> → API Keys</span>
+          </div>
+          <div class="field">
+            <label>Modelo</label>
+            <select name="claudeModel">
+              <option value="claude-haiku-4-5">claude-haiku-4-5 (rápido, económico — Recomendado)</option>
+              <option value="claude-sonnet-4-5">claude-sonnet-4-5 (más preciso)</option>
+              <option value="claude-opus-4-5">claude-opus-4-5 (máxima precisión)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Guardar configuración</button>
+        <span class="save-msg" id="configSaveMsg">✓ Guardado</span>
+      </div>
+    </form>
+  </div>
+
+  <!-- ── Logs ── -->
+  <div id="page-logs" class="page">
+    <div class="log-bar">
+      <span class="log-bar-title">Logs en tiempo real</span>
+      <div style="display:flex;gap:16px;align-items:center;">
+        <span class="log-count" id="logCount">0 entradas</span>
+        <label class="toggle-check"><input type="checkbox" id="autoScroll" checked> Auto-scroll</label>
+        <button class="btn btn-ghost btn-sm" onclick="clearLogs()">Limpiar</button>
+      </div>
+    </div>
+    <div id="logViewer" class="log-viewer"></div>
+  </div>
+
+</main>
+</div>
+
+<!-- Wizard modal -->
+<div class="modal-backdrop" id="wizardModal">
+  <div class="modal" style="width:700px;max-height:90vh;">
+    <div class="modal-header">
+      <span class="modal-title" id="wizardTitle">Importar por meses</span>
+      <button class="btn btn-ghost btn-icon" onclick="closeWizard()">✕</button>
+    </div>
+    <div class="modal-body" id="wizardBody" style="max-height:60vh;overflow-y:auto;"></div>
+    <div class="modal-footer" id="wizardFooter"></div>
+  </div>
+</div>
+
+<!-- Budget modal -->
+<div class="modal-backdrop" id="budgetModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Seleccionar presupuesto</span>
+      <button class="btn btn-ghost btn-icon" onclick="closeBudgetModal()">✕</button>
+    </div>
+    <div class="modal-body" id="budgetModalBody">Cargando...</div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeBudgetModal()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let actualAccounts  = [];
+let actualCategories = [];
+let categoryRules   = [];
+let logCount        = 0;
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const page = btn.dataset.page;
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    document.getElementById('page-' + page).classList.add('active');
+    btn.classList.add('active');
+    if (page === 'cuentas') loadCuentas();
+    if (page === 'categorias') loadCategorias();
+    if (page === 'config') loadConfig();
+  });
+});
+
+// ── Status polling ────────────────────────────────────────────────────────────
+async function refreshStatus() {
+  try {
+    const s = await fetch('/api/status').then(r => r.json());
+    const dot = document.getElementById('statusDot');
+    const title = document.getElementById('syncStatusTitle');
+    const sub   = document.getElementById('syncStatusSub');
+    const btn   = document.getElementById('syncBtn');
+
+    if (s.isSyncing) {
+      dot.className = 'dot syncing';
+      document.getElementById('statusText').textContent = 'Sincronizando…';
+      title.textContent = 'Sincronizando…'; title.style.color = 'var(--yellow)';
+      sub.textContent = 'Importando transacciones desde Brosco';
+      btn.disabled = true;
+    } else if (s.lastSyncStatus === 'error') {
+      dot.className = 'dot error';
+      document.getElementById('statusText').textContent = 'Error';
+      title.textContent = 'Error en el último sync'; title.style.color = 'var(--red)';
+      sub.textContent = s.lastSyncError || '';
+      btn.disabled = false;
+    } else if (s.lastSyncStatus === 'ok') {
+      dot.className = 'dot ok';
+      document.getElementById('statusText').textContent = 'OK';
+      title.textContent = 'Sync completado'; title.style.color = 'var(--green)';
+      sub.textContent = 'Próximo sync según el cron configurado';
+      btn.disabled = false;
+    } else {
+      dot.className = 'dot idle';
+      document.getElementById('statusText').textContent = 'En espera';
+      title.textContent = 'En espera'; title.style.color = '';
+      sub.textContent = 'Sin sync todavía';
+      btn.disabled = false;
+    }
+
+    const err = document.getElementById('errorBox');
+    if (s.lastSyncStatus === 'error' && s.lastSyncError) {
+      err.textContent = '⚠ ' + s.lastSyncError; err.classList.add('show');
+    } else { err.classList.remove('show'); }
+
+    if (s.lastSync) {
+      const d = new Date(s.lastSync);
+      document.getElementById('lastSyncVal').textContent  = d.toLocaleTimeString('es-PY', {hour:'2-digit',minute:'2-digit'});
+      document.getElementById('lastSyncDate').textContent = d.toLocaleDateString('es-PY', {day:'2-digit',month:'short',year:'numeric'});
+      document.getElementById('lastSyncText').textContent = 'Último: ' + d.toLocaleTimeString('es-PY', {hour:'2-digit',minute:'2-digit'});
+    }
+
+    const accounts = Object.entries(s.accounts || {});
+    let totalNew = 0;
+    accounts.forEach(([,info]) => totalNew += (info.added || 0));
+    document.getElementById('totalNewVal').textContent    = totalNew;
+    document.getElementById('accountCountVal').textContent = accounts.length || '—';
+
+    const cards = document.getElementById('accountCards');
+    cards.innerHTML = accounts.map(([num, info]) => {
+      const bal = info.balance != null ? info.balance.toLocaleString('es-PY') + ' Gs' : null;
+      const avail = info.available != null ? info.available.toLocaleString('es-PY') + ' Gs' : null;
+      return `
+      <div class="account-card">
+        <div class="account-card-header">
+          <span class="account-num">${num}</span>
+          <span class="badge badge-green">+${info.added||0} nuevas</span>
+          ${info.updated ? `<span class="badge badge-muted">${info.updated} actualizadas</span>` : ''}
+          <span class="badge badge-blue" style="margin-left:auto;">${escHtml(info.actualName || 'vinculada')}</span>
+        </div>
+        ${bal ? `<div style="display:flex;gap:32px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+          <div>
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Saldo contable</div>
+            <div style="font-size:20px;font-weight:700;margin-top:3px;">${bal}</div>
+          </div>
+          ${avail ? `<div>
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Disponible</div>
+            <div style="font-size:20px;font-weight:700;margin-top:3px;color:var(--green);">${avail}</div>
+          </div>` : ''}
+        </div>` : ''}
+      </div>`;
+    }).join('');
+  } catch(e) {}
+}
+setInterval(refreshStatus, 4000);
+refreshStatus();
+
+// ── Sync ─────────────────────────────────────────────────────────────────────
+async function triggerSync() {
+  document.getElementById('syncBtn').disabled = true;
+  try {
+    const r = await fetch('/api/sync', {method:'POST'});
+    if (!r.ok) { const e = await r.json(); alert(e.error); }
+  } catch(e) {}
+  setTimeout(refreshStatus, 500);
+}
+
+// ── Cuentas ──────────────────────────────────────────────────────────────────
+async function loadCuentas() {
+  const container = document.getElementById('cuentasContainer');
+  container.innerHTML = '<div style="color:var(--muted);font-size:13px;">Cargando...</div>';
+  try {
+    const [bAccounts, aAccounts] = await Promise.all([
+      fetch('/api/brosco-accounts').then(r => r.json()),
+      fetch('/api/actual-accounts').then(r => r.json()).catch(() => []),
+    ]);
+    actualAccounts = Array.isArray(aAccounts) ? aAccounts : [];
+    container.innerHTML = bAccounts.map(ba => buildAccountCard(ba, actualAccounts)).join('');
+  } catch(e) {
+    container.innerHTML = `<div class="error-box show">${e.message}</div>`;
+  }
+}
+
+function buildAccountCard(ba, aAccounts) {
+  const s = ba.settings || {};
+  const linked = s.actualAccountId ? aAccounts.find(a => a.id === s.actualAccountId) : null;
+  const displayName = s.displayName || `Brosco ${ba.number} (PYG)`;
+  const onBudget    = s.onBudget !== false;
+  const accountType = s.accountType || 'checking';
+  const openingBal  = s.openingBalance || 0;
+
+  const accountOptions = aAccounts.map(a =>
+    `<option value="${a.id}" ${s.actualAccountId === a.id ? 'selected' : ''}>${a.name}</option>`
+  ).join('');
+
+  return `
+  <div class="link-card" id="card-${ba.number}">
+    <div class="link-card-header">
+      <span class="account-num">${ba.number}</span>
+      <span class="badge ${linked ? 'badge-green' : 'badge-yellow'} link-status">
+        ${linked ? '✓ Vinculada a: ' + linked.name : '⚠ Sin vincular'}
+      </span>
+    </div>
+    <div class="grid grid-2">
+      <div class="field">
+        <label>Nombre en Actual</label>
+        <input type="text" id="name-${ba.number}" value="${escHtml(displayName)}">
+      </div>
+      <div class="field">
+        <label>Tipo de cuenta</label>
+        <select id="type-${ba.number}">
+          <option value="checking"  ${accountType==='checking'?'selected':''}>Corriente</option>
+          <option value="savings"   ${accountType==='savings'?'selected':''}>Ahorro</option>
+          <option value="credit"    ${accountType==='credit'?'selected':''}>Crédito</option>
+          <option value="investment"${accountType==='investment'?'selected':''}>Inversión</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Vincular a cuenta Actual</label>
+        <div class="input-row">
+          <select id="link-${ba.number}">
+            <option value="">— Crear cuenta nueva —</option>
+            ${accountOptions}
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="autoDetect('${ba.number}')">Auto</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Saldo inicial (PYG)</label>
+        <input type="number" id="bal-${ba.number}" value="${openingBal}">
+      </div>
+      <div class="field" style="justify-content:flex-end;padding-top:4px;">
+        <label>Incluir en presupuesto</label>
+        <div class="toggle-wrap" style="margin-top:6px;">
+          <label class="toggle"><input type="checkbox" id="ob-${ba.number}" ${onBudget?'checked':''}><span class="toggle-slider"></span></label>
+          <span class="toggle-label" id="ob-label-${ba.number}">${onBudget ? 'Sí' : 'No'}</span>
+        </div>
+      </div>
+    </div>
+    <div class="form-actions" style="margin-top:16px;">
+      <button class="btn btn-primary btn-sm" onclick="saveAccount('${ba.number}')">Guardar</button>
+      <span class="save-msg" id="acct-msg-${ba.number}">✓ Guardado</span>
+      <button class="btn btn-ghost btn-sm" onclick="forceReimport('${ba.number}')" style="margin-left:auto;" title="Borra las transacciones existentes en Actual y reimporta todo desde Brosco">↺ Forzar re-importación</button>
+    </div>
+  </div>`;
+}
+
+document.addEventListener('change', e => {
+  if (e.target.id?.startsWith('ob-')) {
+    const num = e.target.id.replace('ob-', '');
+    const lbl = document.getElementById('ob-label-' + num);
+    if (lbl) lbl.textContent = e.target.checked ? 'Sí' : 'No';
+  }
+});
+
+function autoDetect(num) {
+  const sel = document.getElementById('link-' + num);
+  const match = actualAccounts.find(a => a.name.includes(num));
+  if (match) { sel.value = match.id; }
+  else { alert('No se encontró cuenta en Actual que contenga "' + num + '" en el nombre.'); }
+}
+
+async function saveAccount(num) {
+  const settings = {
+    displayName:    document.getElementById('name-' + num)?.value,
+    accountType:    document.getElementById('type-' + num)?.value,
+    actualAccountId: document.getElementById('link-' + num)?.value || null,
+    onBudget:       document.getElementById('ob-' + num)?.checked,
+    openingBalance: parseFloat(document.getElementById('bal-' + num)?.value) || 0,
+  };
+  await fetch('/api/account-settings/' + num, {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(settings),
+  });
+  const msg = document.getElementById('acct-msg-' + num);
+  msg.classList.add('show'); setTimeout(() => msg.classList.remove('show'), 2500);
+  loadCuentas();
+}
+
+// ── Categorías ───────────────────────────────────────────────────────────────
+async function loadCategorias() {
+  try {
+    const [cats, rules] = await Promise.all([
+      fetch('/api/actual-categories').then(r => r.json()).catch(() => []),
+      fetch('/api/category-rules').then(r => r.json()).catch(() => []),
+    ]);
+    actualCategories = Array.isArray(cats) ? cats : [];
+    categoryRules    = Array.isArray(rules) ? rules : [];
+    renderRules();
+  } catch(e) {}
+}
+
+function renderRules() {
+  const tbody = document.getElementById('ruleRows');
+  if (!categoryRules.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="rules-empty">No hay reglas. Hacé clic en "+ Agregar regla".</td></tr>';
+    return;
+  }
+  const catOptions = actualCategories.map(c =>
+    `<option value="${c.id}" data-name="${escHtml(c.name)}">${c.groupName} → ${c.name}</option>`
+  ).join('');
+
+  tbody.innerHTML = categoryRules.map((rule, i) => `
+    <tr>
+      <td><input type="text" value="${escHtml(rule.pattern)}" oninput="categoryRules[${i}].pattern=this.value" style="font-family:'JetBrains Mono',monospace;font-size:12px;"></td>
+      <td>
+        <select onchange="categoryRules[${i}].categoryId=this.value;categoryRules[${i}].categoryName=this.options[this.selectedIndex].dataset.name">
+          <option value="">— Sin categoría —</option>
+          ${catOptions.replace(`value="${rule.categoryId}"`, `value="${rule.categoryId}" selected`)}
+        </select>
+      </td>
+      <td><button class="btn btn-danger btn-icon btn-sm" onclick="deleteRule(${i})">✕</button></td>
+    </tr>`).join('');
+}
+
+function addRule() {
+  categoryRules.push({ pattern: '', categoryId: '', categoryName: '' });
+  renderRules();
+}
+function deleteRule(i) {
+  categoryRules.splice(i, 1);
+  renderRules();
+}
+async function saveRules() {
+  await fetch('/api/category-rules', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ rules: categoryRules.filter(r => r.pattern) }),
+  });
+  const msg = document.getElementById('rulesSaveMsg');
+  msg.classList.add('show'); setTimeout(() => msg.classList.remove('show'), 2500);
+}
+
+// ── Budget modal ──────────────────────────────────────────────────────────────
+async function openBudgetModal() {
+  document.getElementById('budgetModal').classList.add('show');
+  const body = document.getElementById('budgetModalBody');
+  body.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px;">Cargando presupuestos...</div>';
+  try {
+    const budgets = await fetch('/api/budgets').then(r => r.json());
+    if (budgets.error) throw new Error(budgets.error);
+    body.innerHTML = budgets.length
+      ? budgets.map(b => {
+          const syncId = b.groupId || b.cloudFileId || b.id;
+          return `<div class="budget-row" onclick="selectBudget('${syncId}')">
+            <div class="budget-row-name">${escHtml(b.name)}</div>
+            <div class="budget-row-id">Sync ID (el que va en el campo): ${syncId}</div>
+          </div>`;
+        }).join('')
+      : '<div style="color:var(--muted);text-align:center;padding:20px;">No se encontraron presupuestos.</div>';
+  } catch(err) {
+    body.innerHTML = `<div style="color:var(--red);padding:12px;">${err.message}</div>`;
+  }
+}
+function selectBudget(syncId) {
+  const form = document.getElementById('configForm');
+  if (form.elements['actualBudgetId']) form.elements['actualBudgetId'].value = syncId;
+  closeBudgetModal();
+}
+function closeBudgetModal() {
+  document.getElementById('budgetModal').classList.remove('show');
+}
+document.getElementById('budgetModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('budgetModal')) closeBudgetModal();
+});
+
+// ── Logs ──────────────────────────────────────────────────────────────────────
+function appendLog(entry) {
+  const viewer = document.getElementById('logViewer');
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  const time = entry.ts.slice(11, 19);
+  div.innerHTML = `<span class="log-ts">${time}</span><span class="log-level-${entry.level}">${entry.level.toUpperCase().slice(0,4)}</span><span class="log-msg">${escHtml(entry.message)}</span>`;
+  viewer.appendChild(div);
+  logCount++;
+  document.getElementById('logCount').textContent = logCount + ' entradas';
+  if (document.getElementById('autoScroll').checked) viewer.scrollTop = viewer.scrollHeight;
+}
+function clearLogs() {
+  document.getElementById('logViewer').innerHTML = '';
+  logCount = 0;
+  document.getElementById('logCount').textContent = '0 entradas';
+}
+const evtSource = new EventSource('/api/logs/stream');
+evtSource.onmessage = e => appendLog(JSON.parse(e.data));
+
+// ── Utils ────────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Wizard ───────────────────────────────────────────────────────────────────
+let wizardPeriodData = {};
+let wizardSelection  = {};
+let wizardPollTimer  = null;
+let wizardES         = null;
+
+function openWizard() {
+  document.getElementById('wizardModal').classList.add('show');
+  startWizardStep1();
+}
+function closeWizard() {
+  if (wizardPollTimer) { clearInterval(wizardPollTimer); wizardPollTimer = null; }
+  if (wizardES) { wizardES.close(); wizardES = null; }
+  document.getElementById('wizardModal').classList.remove('show');
+}
+document.getElementById('wizardModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('wizardModal')) closeWizard();
+});
+
+function wizardSetLoading(title, lines) {
+  document.getElementById('wizardTitle').textContent = title;
+  document.getElementById('wizardBody').innerHTML = `
+    <div style="padding:24px 8px;">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;">
+        <div style="width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;flex-shrink:0;"></div>
+        <div>
+          <div style="font-size:14px;font-weight:600;" id="wLoadMain">${lines[0]||''}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px;" id="wLoadSub">${lines[1]||''}</div>
+        </div>
+      </div>
+      <div id="wLoadSteps" style="space-y:4px;"></div>
+    </div>`;
+  document.getElementById('wizardFooter').innerHTML = `<button class="btn btn-ghost" onclick="closeWizard()">Cancelar</button>`;
+}
+
+function wizardUpdateLoading(main, sub, steps) {
+  const m = document.getElementById('wLoadMain'); if (m) m.textContent = main || '';
+  const s = document.getElementById('wLoadSub');  if (s) s.textContent = sub  || '';
+  const st = document.getElementById('wLoadSteps');
+  if (st && steps) st.innerHTML = steps.map(step =>
+    `<div style="font-size:12px;color:${step.done?'var(--green)':step.active?'var(--text)':'var(--muted)'};padding:3px 0;">
+       ${step.done ? '✓' : step.active ? '›' : '·'} ${escHtml(step.label)}
+     </div>`
+  ).join('');
+}
+
+async function startWizardStep1() {
+  const cfg = await fetch('/api/config').then(r=>r.json()).catch(()=>({}));
+  const accounts = (cfg.syncAccounts||'').split(',').map(s=>s.trim()).filter(Boolean);
+
+  wizardSetLoading('Detectando períodos disponibles', [
+    'Consultando la API de Brosco...',
+    'Revisando los últimos 24 meses por cada cuenta'
+  ]);
+
+  const stepState = accounts.map(a => ({ label: `Cuenta ${a} — consultando...`, done: false, active: true }));
+  wizardUpdateLoading('Consultando Brosco...', `Revisando ${accounts.length} cuenta(s) × 24 meses`, stepState);
+
+  try {
+    const data = await fetch('/api/detect-periods').then(r => r.json());
+    if (data.error) throw new Error(data.error);
+    wizardPeriodData = data;
+    wizardSelection  = {};
+    for (const [acct, periods] of Object.entries(data)) {
+      wizardSelection[acct] = new Set(periods.filter(p => p.hasData).map(p => p.period));
+      const available = periods.filter(p => p.hasData).length;
+      const idx = accounts.indexOf(acct);
+      if (idx >= 0) { stepState[idx].label = `Cuenta ${acct} — ${available} períodos con datos`; stepState[idx].done = true; stepState[idx].active = false; }
+    }
+    wizardUpdateLoading('Detección completa', `Seleccioná los meses a importar`, stepState);
+    await new Promise(r => setTimeout(r, 500)); // brief pause to show completion
+    showWizardStep2();
+  } catch(err) {
+    document.getElementById('wizardBody').innerHTML = `<div class="error-box show">${escHtml(err.message)}</div>`;
+  }
+}
+
+function showWizardStep2() {
+  document.getElementById('wizardTitle').textContent = 'Seleccioná los meses a importar';
+
+  const MONTH_NAMES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  function fmtPeriod(p) {
+    const y = p.slice(0,4), m = parseInt(p.slice(4,6));
+    return `${MONTH_NAMES[m-1]} ${y}`;
+  }
+
+  let html = '';
+  for (const [acct, periods] of Object.entries(wizardPeriodData)) {
+    const settings = config_cache?.accountSettings?.[acct] || {};
+    const name = settings.displayName || `Cuenta ${acct}`;
+    html += `<div style="margin-bottom:24px;">
+      <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">${escHtml(name)} (${acct})</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">`;
+    for (const p of periods) {
+      const sel = wizardSelection[acct]?.has(p.period);
+      const cls = p.hasData ? (sel ? 'badge-green' : 'badge-muted') : 'badge-muted';
+      const opacity = p.hasData ? '1' : '0.4';
+      html += `<div onclick="togglePeriod('${acct}','${p.period}',${p.hasData})" id="wp-${acct}-${p.period}"
+        style="cursor:${p.hasData?'pointer':'default'};opacity:${opacity};padding:8px 12px;border-radius:10px;
+               border:1px solid ${sel&&p.hasData?'var(--accent)':'var(--border)'};
+               background:${sel&&p.hasData?'var(--accent-dim)':'var(--surface)'};
+               text-align:center;min-width:72px;transition:all .15s;">
+        <div style="font-size:12px;font-weight:600;color:${sel&&p.hasData?'var(--accent)':'var(--text)'}">${fmtPeriod(p.period)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;">${p.hasData ? p.count + ' mov.' : '—'}</div>
+        <div style="font-size:10px;margin-top:3px;">${p.hasData&&sel ? '☑' : p.hasData ? '☐' : '✕'}</div>
+      </div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  html += `<div style="margin-top:8px;padding:14px 16px;background:var(--surface2);border-radius:10px;border:1px solid var(--border);">
+    <label class="toggle-wrap" style="cursor:pointer;">
+      <label class="toggle"><input type="checkbox" id="wizardForce"><span class="toggle-slider"></span></label>
+      <div>
+        <div style="font-size:13px;font-weight:600;">Forzar re-importación</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">Borra las transacciones existentes en Actual antes de importar — útil si borraste manualmente y querés empezar de cero</div>
+      </div>
+    </label>
+  </div>`;
+
+  document.getElementById('wizardBody').innerHTML = html;
+  document.getElementById('wizardFooter').innerHTML = `
+    <button class="btn btn-ghost" onclick="closeWizard()">Cancelar</button>
+    <button class="btn btn-primary" onclick="runWizardImport()">Importar seleccionados</button>`;
+}
+
+let config_cache = null;
+fetch('/api/config').then(r => r.json()).then(c => config_cache = c);
+
+function togglePeriod(acct, period, hasData) {
+  if (!hasData) return;
+  if (!wizardSelection[acct]) wizardSelection[acct] = new Set();
+  const sel = wizardSelection[acct];
+  if (sel.has(period)) sel.delete(period); else sel.add(period);
+  const el = document.getElementById(`wp-${acct}-${period}`);
+  if (!el) return;
+  const active = sel.has(period);
+  el.style.border    = `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`;
+  el.style.background = active ? 'var(--accent-dim)' : 'var(--surface)';
+  el.children[0].style.color = active ? 'var(--accent)' : 'var(--text)';
+  el.children[2].textContent = active ? '☑' : '☐';
+}
+
+async function runWizardImport() {
+  const force = document.getElementById('wizardForce')?.checked || false;
+  const accountPeriods = {};
+  for (const [acct, sel] of Object.entries(wizardSelection)) {
+    const arr = [...sel];
+    if (arr.length) accountPeriods[acct] = arr;
+  }
+  if (!Object.keys(accountPeriods).length) { alert('Seleccioná al menos un período'); return; }
+
+  const totalPeriods = Object.values(accountPeriods).reduce((s,a) => s+a.length, 0);
+  const totalAccounts = Object.keys(accountPeriods).length;
+  const importStart = new Date().toISOString();
+
+  document.getElementById('wizardTitle').textContent = force ? 'Forzando re-importación...' : 'Importando transacciones...';
+  document.getElementById('wizardBody').innerHTML = `
+    <div style="padding:8px 0;">
+      <div style="display:flex;align-items:center;gap:12px;padding:14px 0 18px;">
+        <div style="width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;flex-shrink:0;"></div>
+        <div>
+          <div style="font-size:14px;font-weight:600;" id="wImportTitle">
+            ${force ? 'Borrando transacciones existentes en Actual...' : `Importando ${totalPeriods} período(s) de ${totalAccounts} cuenta(s)`}
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px;" id="wImportSub">Iniciando...</div>
+        </div>
+      </div>
+      <div style="height:3px;background:var(--border);border-radius:2px;margin-bottom:16px;">
+        <div id="wProgressBar" style="height:3px;background:var(--accent);border-radius:2px;width:2%;transition:width .5s;"></div>
+      </div>
+      <div style="background:#080a10;border-radius:10px;padding:12px 16px;height:220px;overflow-y:auto;
+                  font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.6;" id="wizardLog"></div>
+    </div>`;
+  document.getElementById('wizardFooter').innerHTML =
+    `<button class="btn btn-ghost" id="wizardCloseBtn" onclick="closeWizard()" disabled>Aguardá...</button>`;
+
+  const wizLog = document.getElementById('wizardLog');
+
+  // SSE: only show logs NEWER than importStart (skip backlog)
+  wizardES = new EventSource('/api/logs/stream');
+  wizardES.onmessage = e => {
+    const entry = JSON.parse(e.data);
+    if (entry.ts < importStart) return; // skip old logs
+    const color = entry.level==='error'?'#ef4444':entry.level==='warn'?'#f59e0b':'#6366f1';
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;gap:10px;';
+    div.innerHTML = `<span style="color:#3a4060;flex-shrink:0;">${entry.ts.slice(11,19)}</span><span style="color:${color};flex-shrink:0;min-width:36px;">${entry.level.toUpperCase().slice(0,4)}</span><span style="color:#8892b0;">${escHtml(entry.message)}</span>`;
+    wizLog.appendChild(div);
+    wizLog.scrollTop = wizLog.scrollHeight;
+    // Update subtitle with current action
+    const sub = document.getElementById('wImportSub');
+    if (sub && entry.level !== 'warn') sub.textContent = entry.message.slice(0, 80);
+  };
+
+  // Start the import
+  try {
+    const r = await fetch('/api/import-periods', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ accountPeriods, force }),
+    });
+    if (!r.ok) {
+      const err = await r.json();
+      wizardES.close(); wizardES = null;
+      document.getElementById('wizardBody').innerHTML = `<div class="error-box show" style="margin:16px 0;">${escHtml(err.error)}</div>`;
+      document.getElementById('wizardCloseBtn').disabled = false;
+      document.getElementById('wizardCloseBtn').textContent = 'Cerrar';
+      return;
+    }
+  } catch(err) {
+    wizardES.close(); wizardES = null;
+    document.getElementById('wizardBody').innerHTML = `<div class="error-box show" style="margin:16px 0;">${escHtml(err.message)}</div>`;
+    document.getElementById('wizardCloseBtn').disabled = false;
+    document.getElementById('wizardCloseBtn').textContent = 'Cerrar';
+    return;
+  }
+
+  // Poll /api/status until sync finishes
+  let wasEverSyncing = false, progress = 5;
+  wizardPollTimer = setInterval(async () => {
+    try {
+      const status = await fetch('/api/status').then(r => r.json());
+      if (status.isSyncing) {
+        wasEverSyncing = true;
+        progress = Math.min(progress + 4, 88);
+        const bar = document.getElementById('wProgressBar');
+        if (bar) bar.style.width = progress + '%';
+      }
+      if (wasEverSyncing && !status.isSyncing) {
+        clearInterval(wizardPollTimer); wizardPollTimer = null;
+        if (wizardES) { wizardES.close(); wizardES = null; }
+        const bar = document.getElementById('wProgressBar');
+        if (bar) bar.style.width = '100%';
+        const ok = status.lastSyncStatus !== 'error';
+        const title = document.getElementById('wImportTitle');
+        const sub   = document.getElementById('wImportSub');
+        const btn   = document.getElementById('wizardCloseBtn');
+        if (title) { title.textContent = ok ? '✓ Importación completada' : '⚠ Terminó con errores'; title.style.color = ok ? 'var(--green)' : 'var(--red)'; }
+        if (sub)   sub.textContent = ok ? 'Cerrá el wizard para ver las transacciones en Actual Budget' : (status.lastSyncError || '');
+        if (btn)   { btn.disabled = false; btn.textContent = 'Cerrar'; }
+        refreshStatus();
+      }
+    } catch {}
+  }, 1200);
+
+  // Safety timeout: unlock after 3 minutes
+  setTimeout(() => {
+    if (!wizardPollTimer) return;
+    clearInterval(wizardPollTimer); wizardPollTimer = null;
+    if (wizardES) { wizardES.close(); wizardES = null; }
+    const btn = document.getElementById('wizardCloseBtn');
+    if (btn && btn.disabled) { btn.disabled = false; btn.textContent = 'Cerrar'; }
+  }, 180000);
+}
+
+// ── Force reimport per account ────────────────────────────────────────────────
+async function forceReimport(num) {
+  if (!confirm(`¿Confirmar?\n\nEsto borrará TODAS las transacciones de la cuenta ${num} en Actual Budget y las reimportará desde Brosco.\n\nUsá esto si borraste transacciones manualmente y el sync dice "0 nuevos".`)) return;
+  const btn = event.currentTarget;
+  btn.disabled = true; btn.textContent = 'Limpiando...';
+  try {
+    const r = await fetch(`/api/force-reimport/${num}`, { method: 'POST' });
+    if (!r.ok) { const e = await r.json(); alert(e.error); return; }
+    btn.textContent = 'Reimportando...';
+    // Watch status until done
+    const poll = setInterval(async () => {
+      const s = await fetch('/api/status').then(r => r.json());
+      if (!s.isSyncing) {
+        clearInterval(poll);
+        btn.disabled = false; btn.textContent = '↺ Forzar re-importación';
+        refreshStatus();
+      }
+    }, 1500);
+  } catch(err) {
+    alert(err.message);
+    btn.disabled = false; btn.textContent = '↺ Forzar re-importación';
+  }
+}
+
+// ── AI toggle sync ────────────────────────────────────────────────────────────
+const useAiCheck = document.getElementById('useAiCheck');
+if (useAiCheck) {
+  useAiCheck.addEventListener('change', () => {
+    document.getElementById('useAiLabel').textContent = useAiCheck.checked ? 'Activado' : 'Desactivado';
+  });
+}
+const reconcileCheck = document.getElementById('reconcileCheck');
+if (reconcileCheck) {
+  reconcileCheck.addEventListener('change', () => {
+    document.getElementById('reconcileLabel').textContent = reconcileCheck.checked ? 'Activado' : 'Desactivado';
+  });
+}
+
+// ── Category test ─────────────────────────────────────────────────────────────
+async function testCategorize() {
+  const desc = document.getElementById('testDesc').value.trim();
+  if (!desc) return;
+  const btn = document.getElementById('testBtn');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await fetch('/api/categorize-test', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ description: desc }),
+    });
+    const data = await r.json();
+    const result = document.getElementById('testResult');
+    result.style.display = 'block';
+    const sourceLabel = { regla: '✓ Regla manual', ia: '✦ Claude IA', sin_categoria: '— Sin categoría' };
+    const sourceColor = { regla: 'var(--green)', ia: 'var(--accent)', sin_categoria: 'var(--muted)' };
+    result.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="color:${sourceColor[data.source]};font-weight:600;">${sourceLabel[data.source] || data.source}</span>
+        <span style="color:var(--text);font-size:14px;font-weight:600;">${escHtml(data.categoryName)}</span>
+        ${data.categoryId ? `<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);">${data.categoryId}</span>` : ''}
+      </div>`;
+    if (data.error) result.innerHTML = `<span style="color:var(--red);">${escHtml(data.error)}</span>`;
+  } catch(e) {
+    document.getElementById('testResult').style.display = 'block';
+    document.getElementById('testResult').innerHTML = `<span style="color:var(--red);">${e.message}</span>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Probar';
+  }
+}
+
+async function clearCatCache() {
+  await fetch('/api/category-cache/clear', { method: 'POST' });
+  alert('Caché limpiado. El próximo sync re-categorizará con IA.');
+}
+
+// ── Config: sync useAiCategories checkbox with config ─────────────────────────
+async function loadConfig() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  const form = document.getElementById('configForm');
+  for (const [k, v] of Object.entries(cfg)) {
+    const el = form.elements[k];
+    if (!el) continue;
+    if (el.type === 'checkbox') { el.checked = v === true || v === 'true'; }
+    else if (typeof v === 'string' || typeof v === 'number') el.value = v;
+  }
+  // Sync toggle labels
+  const check = form.elements['useAiCategories'];
+  const lbl   = document.getElementById('useAiLabel');
+  if (check && lbl) lbl.textContent = check.checked ? 'Activado' : 'Desactivado';
+  const rcheck = form.elements['reconcileBalance'];
+  const rlbl   = document.getElementById('reconcileLabel');
+  if (rcheck && rlbl) rlbl.textContent = rcheck.checked ? 'Activado' : 'Desactivado';
+  // Update AI status in Categorías tab
+  const aiInfo = document.getElementById('aiStatusInfo');
+  if (aiInfo) {
+    const enabled = cfg.useAiCategories === true || cfg.useAiCategories === 'true';
+    aiInfo.textContent = enabled
+      ? '✦ IA activa — Claude categoriza automáticamente con caché.'
+      : 'Desactivada. Activala en Configuración → Categorización con IA.';
+    aiInfo.style.color = enabled ? 'var(--accent)' : '';
+  }
+}
+
+async function saveConfig(e) {
+  e.preventDefault();
+  const form = e.target;
+  const data = {};
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    data[el.name] = el.type === 'checkbox' ? el.checked : el.value;
+  }
+  await fetch('/api/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+  const msg = document.getElementById('configSaveMsg');
+  msg.classList.add('show'); setTimeout(() => msg.classList.remove('show'), 2500);
+}
+
+// Initial load
+loadConfig();
+</script>
+</body>
+</html>
