@@ -16,26 +16,26 @@ async function resolveActualAccount(accountNumber, actualAccounts, settings) {
 
   const name = settings.displayName || `Brosco ${accountNumber} (PYG)`;
   const id   = await actual.createAccount(name, {
-    type:           settings.accountType    || 'checking',
-    onBudget:       settings.onBudget       !== false,
-    openingBalance: settings.openingBalance || 0,
+    type:           settings.accountType || 'checking',
+    onBudget:       settings.onBudget    !== false,
+    openingBalance: 0, // opening handled by setOpeningBalance with the real Brosco value
   });
   logger.info(`Creada cuenta "${name}" en Actual`);
   return { id, name };
 }
 
-// Categorize a list of merged movements, then push them into Actual
-async function importMovements(accountNumber, movements, actualAcc, cfg, categories) {
+// Categorize + import movements, then anchor the real opening balance
+async function importAccount(accountNumber, data, actualAcc, cfg, categories) {
   const rules = cfg.categoryRules || [];
 
   // Pre-categorize unique descriptions (cache + avoids AI rate limits)
-  const uniqueDescs = [...new Set(movements.map(m => m.description).filter(Boolean))];
+  const uniqueDescs = [...new Set(data.movements.map(m => m.description).filter(Boolean))];
   const catCache    = new Map();
   for (const desc of uniqueDescs) {
     catCache.set(desc, await categorizer.categorize(desc, rules, categories, cfg));
   }
 
-  const transactions = movements.map(m => {
+  const transactions = data.movements.map(m => {
     const catId = catCache.get(m.description) ?? null;
     return {
       date:        m.date,
@@ -52,96 +52,50 @@ async function importMovements(accountNumber, movements, actualAcc, cfg, categor
   const added   = result.added?.length   ?? 0;
   const updated = result.updated?.length ?? 0;
 
-  // Reconcile so Actual's balance matches Brosco's real balance
-  const realBalance = movements.balance; // PYG (may be null if movements call failed)
-  let adjustment = null;
-  if (cfg.reconcileBalance !== false && realBalance != null) {
-    adjustment = await actual.reconcileBalance(accountNumber, actualAcc.id, Math.round(realBalance * 100));
-    logger.info(`Account ${accountNumber}: saldo reconciliado a ${realBalance.toLocaleString('es-PY')} Gs (ajuste ${(adjustment/100).toLocaleString('es-PY')} Gs)`);
+  // Anchor the real opening balance — movements carry it to the real current balance
+  if (cfg.reconcileBalance !== false && data.openingBalance != null) {
+    await actual.setOpeningBalance(
+      accountNumber, actualAcc.id,
+      Math.round(data.openingBalance * 100),
+      data.openingDate
+    );
+    logger.info(`Account ${accountNumber}: saldo inicial ${data.openingBalance.toLocaleString('es-PY')} Gs anclado → saldo actual ${(data.currentBalance ?? 0).toLocaleString('es-PY')} Gs`);
   }
 
   state.accounts[accountNumber] = {
     added, updated,
     actualName: actualAcc.name,
-    balance:    realBalance,
-    available:  movements.availableBalance,
+    balance:    data.currentBalance,
+    available:  data.availableBalance,
   };
   logger.info(`Account ${accountNumber}: ${added} nuevos, ${updated} actualizados → "${actualAcc.name}"`);
 }
 
-// ── Regular scheduled sync: one continuous range over the last N months ────────
-async function runSync() {
+// Shared driver for a set of accounts over a set of periods
+async function syncPeriods(accountPeriods, { force = false, label = 'Sync' } = {}) {
   if (state.isSyncing) { logger.warn('Sync ya en curso, saltando'); return; }
   state.isSyncing     = true;
   state.lastSyncError = null;
-  logger.info('Sync iniciado');
+  logger.info(`${label} iniciado`);
 
   try {
     const cfg            = config.load();
-    const targetAccounts = cfg.syncAccounts.split(',').map(s => s.trim()).filter(Boolean);
-    const monthsBack     = parseInt(cfg.syncMonthsBack || '3', 10);
-    const { start, end } = brosco.recentDateRange(monthsBack);
     const actualAccounts = await actual.getAccounts();
     const settings       = cfg.accountSettings || {};
     const needCats       = (cfg.categoryRules?.length > 0) || cfg.useAiCategories;
     const categories     = needCats ? await actual.getCategories().catch(() => []) : [];
-
-    logger.info(`Rango: ${start} → ${end} (${monthsBack} meses)`);
     if (cfg.useAiCategories) logger.info(`IA activa (${categories.length} categorías)`);
-
-    for (const accountNumber of targetAccounts) {
-      const movements = await brosco.getMergedMovements(accountNumber, start, end);
-      if (!movements.length) { logger.info(`Account ${accountNumber}: sin movimientos`); state.accounts[accountNumber] = { added: 0, updated: 0 }; continue; }
-      const actualAcc = await resolveActualAccount(accountNumber, actualAccounts, settings[accountNumber] || {});
-      await importMovements(accountNumber, movements, actualAcc, cfg, categories);
-    }
-
-    state.lastSync       = new Date().toISOString();
-    state.lastSyncStatus = 'ok';
-    logger.info('Sync completo');
-  } catch (err) {
-    state.lastSyncStatus = 'error';
-    state.lastSyncError  = err.message;
-    logger.error(`Sync falló: ${err.message}`);
-  } finally {
-    state.isSyncing = false;
-  }
-}
-
-// ── Wizard: import exactly the selected months (each as its own date range) ─────
-async function runSyncPeriods(accountPeriods, force = false) {
-  if (state.isSyncing) { logger.warn('Sync ya en curso'); return; }
-  state.isSyncing     = true;
-  state.lastSyncError = null;
-  logger.info(`Importación por meses iniciada (force=${force})`);
-
-  try {
-    const cfg            = config.load();
-    const actualAccounts = await actual.getAccounts();
-    const settings       = cfg.accountSettings || {};
-    const needCats       = (cfg.categoryRules?.length > 0) || cfg.useAiCategories;
-    const categories     = needCats ? await actual.getCategories().catch(() => []) : [];
 
     for (const [accountNumber, periods] of Object.entries(accountPeriods)) {
       if (!periods?.length) continue;
-      logger.info(`Cuenta ${accountNumber}: meses ${periods.join(', ')}`);
+      logger.info(`Cuenta ${accountNumber}: ${periods.length} mes(es) [${periods.join(', ')}]`);
 
-      // Fetch each selected month as its own date range — nothing else leaks in
-      const movements = [];
-      for (const period of periods) {
-        const { start, end } = brosco.periodToRange(period);
-        const monthMovs = await brosco.getMergedMovements(accountNumber, start, end);
-        movements.push(...monthMovs);
+      const data = await brosco.getAccountData(accountNumber, periods);
+      if (!data.movements.length && data.openingBalance == null) {
+        logger.info(`Account ${accountNumber}: sin datos`);
+        state.accounts[accountNumber] = { added: 0, updated: 0 };
+        continue;
       }
-
-      // Always reconcile to the CURRENT real balance (independent of imported months)
-      try {
-        const bal = await brosco.getBalance(accountNumber);
-        movements.balance          = bal.balance;
-        movements.availableBalance = bal.availableBalance;
-      } catch {}
-
-      if (!movements.length) { logger.info(`Account ${accountNumber}: sin movimientos en los meses seleccionados`); continue; }
 
       const actualAcc = await resolveActualAccount(accountNumber, actualAccounts, settings[accountNumber] || {});
 
@@ -150,19 +104,34 @@ async function runSyncPeriods(accountPeriods, force = false) {
         logger.info(`Force: eliminadas ${deleted} transacciones de "${actualAcc.name}"`);
       }
 
-      await importMovements(accountNumber, movements, actualAcc, cfg, categories);
+      await importAccount(accountNumber, data, actualAcc, cfg, categories);
     }
 
     state.lastSync       = new Date().toISOString();
     state.lastSyncStatus = 'ok';
-    logger.info('Importación por meses completa');
+    logger.info(`${label} completo`);
   } catch (err) {
     state.lastSyncStatus = 'error';
     state.lastSyncError  = err.message;
-    logger.error(`Importación falló: ${err.message}`);
+    logger.error(`${label} falló: ${err.message}`);
   } finally {
     state.isSyncing = false;
   }
+}
+
+// Scheduled sync: last N months for every configured account
+async function runSync() {
+  const cfg          = config.load();
+  const accounts     = cfg.syncAccounts.split(',').map(s => s.trim()).filter(Boolean);
+  const monthsBack   = parseInt(cfg.syncMonthsBack || '3', 10);
+  const periods      = brosco.recentPeriods(monthsBack);
+  const accountPeriods = Object.fromEntries(accounts.map(a => [a, periods]));
+  return syncPeriods(accountPeriods, { label: 'Sync' });
+}
+
+// Wizard: import exactly the selected months
+async function runSyncPeriods(accountPeriods, force = false) {
+  return syncPeriods(accountPeriods, { force, label: 'Importación por meses' });
 }
 
 module.exports = { runSync, runSyncPeriods };

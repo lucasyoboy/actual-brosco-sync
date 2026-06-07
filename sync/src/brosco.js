@@ -65,6 +65,17 @@ async function getMovements(accountNumber, startDate, endDate) {
   return res.json();
 }
 
+// Account statement for one month — includes initialBalance / endingBalance
+async function getStatements(accountNumber, period) {
+  const url = `${API_BASE}/brosco-accounts/accounts/${accountNumber}/statements?period=${period}`;
+  const res = await authedGet(url);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(`Statements [${accountNumber}/${period}] [${res.status}]: ${e.message || 'unknown'}`);
+  }
+  return res.json();
+}
+
 // Transactions list, optionally filtered by date range (server-side)
 async function getTransactions(from, to) {
   let url = `${API_BASE}/brosco-transactions/transactions/list`;
@@ -81,9 +92,13 @@ async function getTransactions(from, to) {
 
 function richPayee(tx) {
   if (tx.type === 'QR-PAYMENT') {
-    return tx.additionalInfo?.qrPaymentResponse?.payment?.commerce_name
+    const pay = tx.additionalInfo?.qrPaymentResponse?.payment || {};
+    // Prefer the human branch/commerce name, fall back to QR data
+    return pay.branch_name
+        || pay.commerce_name
         || tx.additionalInfo?.qrInfoData?.commerce_name
-        || 'QR Payment';
+        || tx.additionalInfo?.qrInfoData?.payment_alias
+        || 'Pago QR';
   }
   if (IN_TYPES.has(tx.type)) {
     return tx.additionalInfo?.sender?.name
@@ -111,53 +126,68 @@ function txnBelongsTo(tx, accountNumber) {
       || (isIn  && d?.destination?.account === accountNumber);
 }
 
-// ── Merged fetch over an exact date range ─────────────────────────────────────
+// ── Account data over a set of months (period-based) ─────────────────────────
 /**
- * Combines /movements (account statement) + /transactions/list for the SAME date range.
- * Both calls are filtered server-side, so this is light even over long ranges.
+ * Statements (/movements?period=) are the single source of truth for the ledger
+ * AND the balance: each month exposes its real initialBalance / endingBalance.
  *
- * Dedup strategy: a movement and a transaction with the same date+amount are the SAME
- * operation seen by two systems. We merge them, keeping the richer payee from the
- * transactions API (e.g. "MAURICIO ALMADA" instead of "Extraccion BROSCO").
- * Transactions with no matching movement are added as exclusive entries, and
- * vice-versa, so nothing is lost.
+ * - movements = every operation that affects the account → drives the balance
+ * - transactions = only enriches the payee name (commerce / person) by date+amount;
+ *   it never adds new entries, so it can't cause duplicates or break the balance.
+ *
+ * Returns:
+ *   { movements: [{importedId,date,amount,description,rawDesc}],
+ *     openingBalance, openingDate,   // initialBalance of the OLDEST month (PYG)
+ *     currentBalance, availableBalance }   // real account balance today
  */
-async function getMergedMovements(accountNumber, startDate, endDate) {
-  // 1. Account movements (authoritative ledger) — also carries the real balance
-  let movements = [];
-  let accountInfo = null;
-  try {
-    const data  = await getMovements(accountNumber, startDate, endDate);
-    movements   = (data.movements || []).filter(m => m.movementId);
-    accountInfo = data.account || null;
-  } catch (err) {
-    const level = /\[400\]|\[401\]/.test(err.message) ? 'info' : 'warn';
-    logger[level](`Movements ${accountNumber} ${startDate}→${endDate}: ${err.message.split(':')[0]}`);
+async function getAccountData(accountNumber, periods) {
+  const sorted = [...periods].sort();               // ascending → oldest first
+  const rawMovements = [];                            // { mov, period }
+  let openingBalance = null, openingDate = null;
+  let currentBalance = null, availableBalance = null;
+
+  for (const period of sorted) {
+    let stmt;
+    try {
+      stmt = await getStatements(accountNumber, period);
+    } catch (err) {
+      const level = /\[400\]|\[401\]/.test(err.message) ? 'info' : 'warn';
+      logger[level](`Statements ${accountNumber}/${period}: ${err.message.split(':')[0]}`);
+      continue;
+    }
+    // Opening balance = initialBalance of the first (oldest) month with data
+    if (openingBalance === null && stmt.initialBalance?.value != null) {
+      openingBalance = stmt.initialBalance.value;
+      openingDate    = stmt.startingDate || periodToRange(period).start;
+    }
+    if (stmt.account?.balance?.value != null)          currentBalance   = stmt.account.balance.value;
+    if (stmt.account?.availableBalance?.value != null) availableBalance = stmt.account.availableBalance.value;
+
+    for (const m of (stmt.movements || [])) {
+      if (m.movementId) rawMovements.push(m);
+    }
   }
 
-  // 2. Transactions for the SAME range (enrich + add exclusives)
-  let accountTxns = [];
-  try {
-    const txnList = await getTransactions(startDate, endDate);
-    accountTxns   = txnList.filter(tx => txnBelongsTo(tx, accountNumber));
-  } catch (err) {
-    logger.warn(`Transactions ${startDate}→${endDate}: ${err.message.split(':')[0]}`);
-  }
-
-  // Index transactions by "date|amount" for dedup against movements
+  // Enrich payees from the transactions API over the whole span (one call)
   const txnByKey = new Map();
-  for (const tx of accountTxns) {
-    const date = (tx.executed || tx.confirmed || tx.created || '').slice(0, 10);
-    const key  = `${date}|${Math.round(txnAmount(tx))}`;
-    if (!txnByKey.has(key)) txnByKey.set(key, []);
-    txnByKey.get(key).push(tx);
+  if (rawMovements.length) {
+    const from = periodToRange(sorted[0]).start;
+    const to   = new Date().toISOString().slice(0, 10);
+    try {
+      const txns = (await getTransactions(from, to)).filter(tx => txnBelongsTo(tx, accountNumber));
+      for (const tx of txns) {
+        const date = (tx.executed || tx.confirmed || tx.created || '').slice(0, 10);
+        const key  = `${date}|${Math.round(txnAmount(tx))}`;
+        if (!txnByKey.has(key)) txnByKey.set(key, []);
+        txnByKey.get(key).push(tx);
+      }
+    } catch (err) {
+      logger.warn(`Transactions enriquecimiento: ${err.message.split(':')[0]}`);
+    }
   }
 
-  const result    = [];
   const usedTxns  = new Set();
-
-  // 3. Movements (enriched with transaction payee when date+amount match)
-  for (const mov of movements) {
+  const movements = rawMovements.map(mov => {
     const isDebit = mov.type === 'DEBIT';
     const date    = mov.movementDate.slice(0, 10);
     const key     = `${date}|${Math.round(mov.amount.value)}`;
@@ -166,53 +196,35 @@ async function getMergedMovements(accountNumber, startDate, endDate) {
     for (const tx of (txnByKey.get(key) || [])) {
       if (!usedTxns.has(tx)) { matchedTx = tx; usedTxns.add(tx); break; }
     }
+    const payee = (matchedTx ? richPayee(matchedTx) : null)
+               || mov.description || (isDebit ? 'Débito' : 'Crédito');
 
-    const payee = (matchedTx ? richPayee(matchedTx) : null) || mov.description || (isDebit ? 'Débito' : 'Crédito');
-    result.push({
+    return {
       importedId:  `stmt_${accountNumber}_${mov.movementId}`,
       date,
       amount:      isDebit ? -Math.round(mov.amount.value * 100) : Math.round(mov.amount.value * 100),
       description: payee,
       rawDesc:     mov.description,
-    });
-  }
+    };
+  });
 
-  // 4. Transactions with no matching movement (exclusive to transactions API)
-  let exclusiveCount = 0;
-  for (const tx of accountTxns) {
-    if (usedTxns.has(tx)) continue;
-    exclusiveCount++;
-    const isDebit = OUT_TYPES.has(tx.type);
-    const amt     = txnAmount(tx);
-    const txId    = (tx.token?.length > 10) ? tx.token : `${tx.type}_${tx.executed}_${tx.externalId || ''}`;
-    result.push({
-      importedId:  `txn_${accountNumber}_${txId}`,
-      date:        (tx.executed || tx.confirmed || tx.created).slice(0, 10),
-      amount:      isDebit ? -Math.round(amt * 100) : Math.round(amt * 100),
-      description: richPayee(tx) || (isDebit ? 'Débito' : 'Crédito'),
-      rawDesc:     tx.type,
-    });
-  }
-
-  // Attach real balance info (in PYG, not cents) for reconciliation & display
-  result.balance          = accountInfo?.balance?.value ?? null;
-  result.availableBalance = accountInfo?.availableBalance?.value ?? null;
-  result.holdBalance      = accountInfo?.holdBalance?.value ?? null;
-
-  logger.info(`Account ${accountNumber} [${startDate}→${endDate}]: ${movements.length} movements + ${exclusiveCount} exclusivas = ${result.length} total | saldo ${result.balance ?? '?'} Gs`);
-  return result;
+  logger.info(`Account ${accountNumber} [${sorted[0]}…${sorted[sorted.length-1]}]: ${movements.length} movimientos | saldo inicial ${openingBalance ?? '?'} → actual ${currentBalance ?? '?'} Gs`);
+  return { movements, openingBalance, openingDate, currentBalance, availableBalance };
 }
 
-// Quick balance fetch (tiny range — just for the account header info)
+// Quick current-balance fetch (one statement call for the current month)
 async function getBalance(accountNumber) {
-  const today = new Date().toISOString().slice(0, 10);
-  const data  = await getMovements(accountNumber, today, today);
-  return {
-    balance:          data.account?.balance?.value ?? null,
-    availableBalance: data.account?.availableBalance?.value ?? null,
-    holdBalance:      data.account?.holdBalance?.value ?? null,
-    accountType:      data.account?.accountType ?? null,
-  };
+  const period = recentPeriods(1)[0];
+  try {
+    const stmt = await getStatements(accountNumber, period);
+    return {
+      balance:          stmt.account?.balance?.value ?? null,
+      availableBalance: stmt.account?.availableBalance?.value ?? null,
+      accountType:      stmt.account?.accountType ?? null,
+    };
+  } catch {
+    return { balance: null, availableBalance: null, accountType: null };
+  }
 }
 
 // ── Period / date helpers ─────────────────────────────────────────────────────
@@ -276,7 +288,7 @@ async function detectAvailablePeriods(accountNumber, maxMonthsBack = 24) {
 function invalidateToken() { cachedToken = null; tokenExpiry = null; }
 
 module.exports = {
-  login, getMovements, getTransactions, getMergedMovements, getBalance,
+  login, getMovements, getTransactions, getAccountData, getBalance,
   detectAvailablePeriods, periodToRange, recentDateRange, recentPeriods,
   invalidateToken,
 };

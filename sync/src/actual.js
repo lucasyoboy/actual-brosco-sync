@@ -85,38 +85,36 @@ async function clearAccountTransactions(accountId) {
 
 const ALL_FROM = '2015-01-01';
 
-// Reconcile so the account's Actual balance equals the real Brosco balance.
-// Creates/updates a single "Ajuste de saldo Brosco" transaction holding the difference.
-async function reconcileBalance(accountNumber, accountId, targetBalanceCents) {
+// Anchor the account with the REAL opening balance from Brosco (initialBalance of
+// the oldest imported month). The real movements then carry it to today's balance
+// automatically — no difference-based adjustment that drifts or duplicates.
+// Idempotent: the previous opening transaction is removed and recreated each run.
+async function setOpeningBalance(accountNumber, accountId, openingCents, openingDate) {
   await init();
-  const adjustId = `balance_adjust_${accountNumber}`;
-  const today    = new Date().toISOString().slice(0, 10);
+  const openingId = `opening_${accountNumber}`;
+  const today     = new Date().toISOString().slice(0, 10);
 
+  // Remove any previous opening AND legacy adjustment transactions
   const txns = await api.getTransactions(accountId, ALL_FROM, today);
-  let sum = 0, oldAdjust = null;
   for (const t of txns) {
-    if (t.imported_id === adjustId) { oldAdjust = t; continue; }
-    sum += t.amount;
+    if (t.imported_id === openingId || t.imported_id === `balance_adjust_${accountNumber}`) {
+      await api.deleteTransaction(t.id);
+    }
   }
 
-  const adjustment = targetBalanceCents - sum;
-
-  // Remove the previous adjustment so it doesn't accumulate
-  if (oldAdjust) await api.deleteTransaction(oldAdjust.id);
-
-  if (adjustment !== 0) {
+  if (openingCents && openingCents !== 0) {
     await api.importTransactions(accountId, [{
-      date:        today,
-      amount:      adjustment,
-      payee_name:  'Ajuste de saldo Brosco',
-      notes:       `Reconciliación automática — saldo real ${(targetBalanceCents/100).toLocaleString('es-PY')} Gs`,
-      imported_id: adjustId,
+      date:        openingDate || today,
+      amount:      openingCents,
+      payee_name:  'Saldo inicial',
+      notes:       'Saldo inicial real de Brosco (ancla de reconciliación)',
+      imported_id: openingId,
       cleared:     true,
     }]);
   }
-  return adjustment;
+  return openingCents;
 }
 
 async function shutdown() { await reset(); }
 
-module.exports = { init, reset, getBudgets, getAccounts, getCategories, createAccount, importTransactions, clearAccountTransactions, reconcileBalance, shutdown };
+module.exports = { init, reset, getBudgets, getAccounts, getCategories, createAccount, importTransactions, clearAccountTransactions, setOpeningBalance, shutdown };

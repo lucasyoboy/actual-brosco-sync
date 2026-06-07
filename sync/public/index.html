@@ -608,7 +608,6 @@ function buildAccountCard(ba, aAccounts) {
   const displayName = s.displayName || `Brosco ${ba.number} (PYG)`;
   const onBudget    = s.onBudget !== false;
   const accountType = s.accountType || 'checking';
-  const openingBal  = s.openingBalance || 0;
 
   const accountOptions = aAccounts.map(a =>
     `<option value="${a.id}" ${s.actualAccountId === a.id ? 'selected' : ''}>${a.name}</option>`
@@ -645,10 +644,6 @@ function buildAccountCard(ba, aAccounts) {
           </select>
           <button class="btn btn-ghost btn-sm" onclick="autoDetect('${ba.number}')">Auto</button>
         </div>
-      </div>
-      <div class="field">
-        <label>Saldo inicial (PYG)</label>
-        <input type="number" id="bal-${ba.number}" value="${openingBal}">
       </div>
       <div class="field" style="justify-content:flex-end;padding-top:4px;">
         <label>Incluir en presupuesto</label>
@@ -687,7 +682,6 @@ async function saveAccount(num) {
     accountType:    document.getElementById('type-' + num)?.value,
     actualAccountId: document.getElementById('link-' + num)?.value || null,
     onBudget:       document.getElementById('ob-' + num)?.checked,
-    openingBalance: parseFloat(document.getElementById('bal-' + num)?.value) || 0,
   };
   await fetch('/api/account-settings/' + num, {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(settings),
@@ -899,8 +893,13 @@ function showWizardStep2() {
   for (const [acct, periods] of Object.entries(wizardPeriodData)) {
     const settings = config_cache?.accountSettings?.[acct] || {};
     const name = settings.displayName || `Cuenta ${acct}`;
+    const dataCount = periods.filter(p => p.hasData).length;
     html += `<div style="margin-bottom:24px;">
-      <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">${escHtml(name)} (${acct})</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <span style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">${escHtml(name)} (${acct})</span>
+        <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 10px;font-size:11px;" onclick="selectAllPeriods('${acct}', true)">Todos (${dataCount})</button>
+        <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 10px;font-size:11px;" onclick="selectAllPeriods('${acct}', false)">Ninguno</button>
+      </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;">`;
     for (const p of periods) {
       const sel = wizardSelection[acct]?.has(p.period);
@@ -938,18 +937,32 @@ function showWizardStep2() {
 let config_cache = null;
 fetch('/api/config').then(r => r.json()).then(c => config_cache = c);
 
+function paintPeriod(acct, period) {
+  const el = document.getElementById(`wp-${acct}-${period}`);
+  if (!el) return;
+  const active = wizardSelection[acct]?.has(period);
+  el.style.border    = `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`;
+  el.style.background = active ? 'var(--accent-dim)' : 'var(--surface)';
+  el.children[0].style.color = active ? 'var(--accent)' : 'var(--text)';
+  el.children[2].textContent = active ? '☑' : '☐';
+}
+
 function togglePeriod(acct, period, hasData) {
   if (!hasData) return;
   if (!wizardSelection[acct]) wizardSelection[acct] = new Set();
   const sel = wizardSelection[acct];
   if (sel.has(period)) sel.delete(period); else sel.add(period);
-  const el = document.getElementById(`wp-${acct}-${period}`);
-  if (!el) return;
-  const active = sel.has(period);
-  el.style.border    = `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`;
-  el.style.background = active ? 'var(--accent-dim)' : 'var(--surface)';
-  el.children[0].style.color = active ? 'var(--accent)' : 'var(--text)';
-  el.children[2].textContent = active ? '☑' : '☐';
+  paintPeriod(acct, period);
+}
+
+function selectAllPeriods(acct, select) {
+  if (!wizardSelection[acct]) wizardSelection[acct] = new Set();
+  const sel = wizardSelection[acct];
+  for (const p of (wizardPeriodData[acct] || [])) {
+    if (!p.hasData) continue;
+    if (select) sel.add(p.period); else sel.delete(p.period);
+    paintPeriod(acct, p.period);
+  }
 }
 
 async function runWizardImport() {
