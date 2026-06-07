@@ -52,14 +52,15 @@ async function importAccount(accountNumber, data, actualAcc, cfg, categories) {
   const added   = result.added?.length   ?? 0;
   const updated = result.updated?.length ?? 0;
 
-  // Anchor the real opening balance — movements carry it to the real current balance
-  if (cfg.reconcileBalance !== false && data.openingBalance != null) {
-    await actual.setOpeningBalance(
+  // Anchor so Actual's balance == Brosco's real balance, no matter which months are present.
+  // opening = realBalance − sum(transactions already in Actual)  →  robust to partial syncs.
+  if (cfg.reconcileBalance !== false && data.currentBalance != null) {
+    const opening = await actual.setOpeningBalance(
       accountNumber, actualAcc.id,
-      Math.round(data.openingBalance * 100),
+      Math.round(data.currentBalance * 100),
       data.openingDate
     );
-    logger.info(`Account ${accountNumber}: saldo inicial ${data.openingBalance.toLocaleString('es-PY')} Gs anclado → saldo actual ${(data.currentBalance ?? 0).toLocaleString('es-PY')} Gs`);
+    logger.info(`Account ${accountNumber}: saldo inicial ajustado a ${(opening/100).toLocaleString('es-PY')} Gs → saldo actual ${data.currentBalance.toLocaleString('es-PY')} Gs`);
   }
 
   state.accounts[accountNumber] = {

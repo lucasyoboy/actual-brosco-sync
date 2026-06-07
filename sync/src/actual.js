@@ -85,34 +85,46 @@ async function clearAccountTransactions(accountId) {
 
 const ALL_FROM = '2015-01-01';
 
-// Anchor the account with the REAL opening balance from Brosco (initialBalance of
-// the oldest imported month). The real movements then carry it to today's balance
-// automatically — no difference-based adjustment that drifts or duplicates.
-// Idempotent: the previous opening transaction is removed and recreated each run.
-async function setOpeningBalance(accountNumber, accountId, openingCents, openingDate) {
+// Anchor the account so its balance equals Brosco's real balance, regardless of how
+// many months are currently in Actual.
+//
+// opening = realBalance − sum(all real transactions already in Actual)
+//
+// This is robust: whatever months exist in Actual, the opening fills exactly the gap
+// up to the real balance. Syncing a narrower range later does NOT change it (the older
+// months stay in Actual and stay counted), which fixes the double-count bug.
+// Idempotent: the previous opening (and legacy adjustment) is removed first.
+async function setOpeningBalance(accountNumber, accountId, realBalanceCents, fallbackDate) {
   await init();
   const openingId = `opening_${accountNumber}`;
   const today     = new Date().toISOString().slice(0, 10);
 
-  // Remove any previous opening AND legacy adjustment transactions
   const txns = await api.getTransactions(accountId, ALL_FROM, today);
+  let sum = 0;
+  let oldestDate = null;
   for (const t of txns) {
     if (t.imported_id === openingId || t.imported_id === `balance_adjust_${accountNumber}`) {
-      await api.deleteTransaction(t.id);
+      await api.deleteTransaction(t.id); // drop previous opening / legacy adjustment
+      continue;
     }
+    sum += t.amount;
+    if (!oldestDate || t.date < oldestDate) oldestDate = t.date;
   }
 
-  if (openingCents && openingCents !== 0) {
+  const opening = realBalanceCents - sum;
+
+  if (opening !== 0) {
     await api.importTransactions(accountId, [{
-      date:        openingDate || today,
-      amount:      openingCents,
+      // Anchor on the oldest real movement so the running balance reads correctly
+      date:        oldestDate || fallbackDate || today,
+      amount:      opening,
       payee_name:  'Saldo inicial',
-      notes:       'Saldo inicial real de Brosco (ancla de reconciliación)',
+      notes:       'Saldo inicial (ancla para que el balance coincida con Brosco)',
       imported_id: openingId,
       cleared:     true,
     }]);
   }
-  return openingCents;
+  return opening;
 }
 
 async function shutdown() { await reset(); }

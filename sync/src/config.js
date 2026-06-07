@@ -24,6 +24,7 @@ function defaults() {
     useAiCategories: false,
     claudeApiKey:    process.env.CLAUDE_API_KEY || '',
     claudeModel:     'claude-haiku-4-5',
+    aiInstructions:  '', // free-text rules the user gives the AI in natural language
     // Balance reconciliation: keep Actual's balance equal to Brosco's real balance
     reconcileBalance: true,
   };

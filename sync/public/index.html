@@ -96,7 +96,13 @@
       border-radius: 8px; padding: 9px 12px; font-size: 13px; font-family: inherit;
       transition: border-color .15s; outline: none; width: 100%;
     }
-    input:focus, select:focus { border-color: var(--accent); }
+    textarea {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      border-radius: 8px; padding: 12px 14px; font-size: 13px; font-family: inherit;
+      transition: border-color .15s; outline: none; width: 100%; resize: vertical;
+      min-height: 120px; line-height: 1.6;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
     select option { background: var(--surface2); }
     .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
     .input-row { display: flex; gap: 8px; align-items: flex-start; }
@@ -309,13 +315,32 @@
       <button class="btn btn-ghost btn-sm" onclick="clearCatCache()" style="margin-left:auto;">Limpiar caché IA</button>
     </div>
 
+    <!-- AI instructions -->
+    <div class="section">
+      <div class="section-title">Instrucciones para la IA ✦</div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;font-size:13px;color:var(--muted);line-height:1.6;">
+        Escribí en lenguaje natural cómo querés que Claude categorice. Estas reglas tienen prioridad y se aplican a cualquier movimiento que no haya coincidido con una regla manual de arriba.
+      </div>
+      <div class="field">
+        <textarea id="aiInstructions" placeholder="Ejemplos:
+- Si la descripción es un nombre completo de persona (nombre y apellido, ej: Netti Deborah Levy Pronovich o Adolfo Alberto Ovelar), es una transferencia entre personas → categoría 'Transferencias'.
+- Pagos a supermercados o despensas → 'Supermercado'.
+- Cualquier cosa con 'ACOMEPA' o 'cooperativa' → 'Aportes'.
+- Si parece un restaurante o comida → 'Comidas'."></textarea>
+      </div>
+      <div class="form-actions" style="margin-top:12px;">
+        <button class="btn btn-primary" onclick="saveAiInstructions()">Guardar instrucciones</button>
+        <span class="save-msg" id="aiInstrMsg">✓ Guardado (caché IA limpiado)</span>
+      </div>
+    </div>
+
     <!-- Test widget -->
     <div class="section">
       <div class="section-title">Probar categorización</div>
       <div style="display:flex;gap:10px;align-items:flex-end;">
         <div class="field" style="flex:1;">
           <label>Descripción del movimiento</label>
-          <input type="text" id="testDesc" placeholder="ej: DEUDORES PRO-EDUCACIÓN">
+          <input type="text" id="testDesc" placeholder="ej: Adolfo Alberto Ovelar">
         </div>
         <button class="btn btn-ghost" onclick="testCategorize()" id="testBtn">Probar</button>
       </div>
@@ -694,14 +719,29 @@ async function saveAccount(num) {
 // ── Categorías ───────────────────────────────────────────────────────────────
 async function loadCategorias() {
   try {
-    const [cats, rules] = await Promise.all([
+    const [cats, rules, cfg] = await Promise.all([
       fetch('/api/actual-categories').then(r => r.json()).catch(() => []),
       fetch('/api/category-rules').then(r => r.json()).catch(() => []),
+      fetch('/api/config').then(r => r.json()).catch(() => ({})),
     ]);
     actualCategories = Array.isArray(cats) ? cats : [];
     categoryRules    = Array.isArray(rules) ? rules : [];
+    const instr = document.getElementById('aiInstructions');
+    if (instr) instr.value = cfg.aiInstructions || '';
     renderRules();
   } catch(e) {}
+}
+
+async function saveAiInstructions() {
+  const aiInstructions = document.getElementById('aiInstructions').value;
+  await fetch('/api/config', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ aiInstructions }),
+  });
+  // Clear AI cache so existing items get re-categorized with the new rules
+  await fetch('/api/category-cache/clear', { method: 'POST' });
+  const msg = document.getElementById('aiInstrMsg');
+  msg.classList.add('show'); setTimeout(() => msg.classList.remove('show'), 3000);
 }
 
 function renderRules() {

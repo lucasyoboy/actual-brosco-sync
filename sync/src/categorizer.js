@@ -39,9 +39,13 @@ function matchPattern(description, rules) {
 }
 
 // ── Claude API ────────────────────────────────────────────────────────────────
-async function askClaude(description, categories, apiKey, model) {
+async function askClaude(description, categories, apiKey, model, instructions) {
   const visible = categories.filter(c => !c.hidden);
   const catList = visible.map(c => `id:${c.id} | ${c.groupName} → ${c.name}`).join('\n');
+
+  const userRules = instructions?.trim()
+    ? `\nReglas indicadas por el usuario (tienen prioridad):\n${instructions.trim()}\n`
+    : '';
 
   const prompt = `Sos un categorizador de transacciones bancarias de una cooperativa paraguaya.
 
@@ -49,7 +53,7 @@ Descripción del movimiento: "${description}"
 
 Categorías disponibles:
 ${catList}
-
+${userRules}
 Respondé ÚNICAMENTE con el UUID (id) de la categoría que mejor encaja.
 Si ninguna encaja bien, respondé con la palabra: null
 Sin explicaciones, solo el id o null.`;
@@ -101,7 +105,7 @@ async function categorize(description, rules, categories, cfg) {
   if (key in cache) return cache[key]; // may be null — still cached
 
   try {
-    const id = await askClaude(description, categories, cfg.claudeApiKey, cfg.claudeModel);
+    const id = await askClaude(description, categories, cfg.claudeApiKey, cfg.claudeModel, cfg.aiInstructions);
     cache[key] = id;
     saveCache();
     const catName = id ? (categories.find(c => c.id === id)?.name || id) : 'Sin categoría';
